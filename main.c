@@ -62,14 +62,21 @@ int main(void) {
     // 4. Output Results
     debugf("\n--- Measurement Results ---\n");
     for (int i = 0; i < 16; i++) {
-        // CPU (46.875MHz) to VI (62.5MHz) Conversion: multiply by 1.333 (4/3)
         uint32_t vi_cycles = (timings[i] * 4) / 3;
         debugf("Line %02d: %lu CPU Ticks (~%lu VI Cycles)\n", i, timings[i], vi_cycles);
     }
 
-    // Hang here so the SC64 can keep the debug buffer open
+    // CRITICAL: Ensure the SC64 actually sees the data
+    debug_flush(); 
+
+    // 5. Hang here, but keep the USB active
+    debugf("Experiment Complete. Holding...\n");
+    debug_flush();
+
     while (1) {
-        /* Experiment Complete */
+        // Optional: blink an LED or just spin
+        // Some SC64 firmware versions prefer the CPU stays active 
+        // to handle USB handshakes depending on the libdragon version.
     }
 
     return 0;
