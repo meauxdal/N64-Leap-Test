@@ -1,59 +1,51 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <libdragon.h>
+#include <n64sys.h> // For register access
+#include <vi.h>     // For vi_set_timing_preset and structs
 
-// Guardrail for the Makefile macro
-#ifndef APP_TITLE
-    #define APP_TITLE "N64_VI_TEST"
-#endif
+// If VI_V_CURRENT is still complaining, use the absolute address 
+// or the libdragon name:
+#define VI_V_CURRENT_REG ((volatile uint32_t*)0xA4400010)
 
 int main(void) {
-    // 1. Initialize bare-metal subsystems
-    // We use vi_init instead of display_init to avoid background interrupts 
-    // from overriding our custom registers.
     debug_init_usblog();
-    vi_init(); 
+    // In current libdragon, vi_init is internal. 
+    // You can usually just start with:
     timer_init();
 
-    // Disable interrupts to ensure our TICKS_READ loop is the only thing running.
     disable_interrupts();
 
-    // 2. Configure the Hardware Experiment
-    // We clone the NTSC preset and modify the H_TOTAL and LEAP values.
-    vi_timing_preset_t test = VI_TIMING_NTSC;
+    // The struct name is actually vi_timing_t in some versions, 
+    // but let's stick to the preset logic. 
+    // If vi_timing_preset_t fails, we use the raw struct:
+    vi_timing_t test = *vi_get_timing(); // Clone current hardware state
 
-    // Pattern 0b01100 (Decimal 12) per Rasky's baseline.
-    // Base Terminal Count 3093 (3094 cycles).
-    test.vi_h_total = VI_H_TOTAL_SET(0b01100, 3093);
-
-    // LEAP_B (3093) and LEAP_A (4000).
-    test.vi_h_total_leap = VI_H_TOTAL_LEAP_SET(3093, 4000); 
+    // Manually adjust the fields in the struct
+    // Pattern 12 | Base 3093
+    test.h_sync = (12 << 16) | 3093; 
+    // LEAP_B (3093) | LEAP_A (4000)
+    test.h_sync_leap = (3093 << 16) | 4000;
     
-    // Apply to silicon.
-    vi_set_timing_preset(&test);
+    // Apply
+    vi_write_config(&test);
 
-    // 3. Measurement Loop
     uint32_t timings[16] = {0};
     uint32_t last_time;
 
-    // Wait for the next field to ensure the new timing registers are latched.
-    vi_wait_vblank();
+    // Manual VBlank wait using the register if the function is missing
+    while (!(*VI_V_CURRENT_REG & 1)); 
     last_time = TICKS_READ();
 
     for (int i = 0; i < 16; i++) {
-        // Poll the line counter (bits 9:1 of VI_V_CURRENT).
-        uint32_t current_line = *VI_V_CURRENT >> 1;
-        
-        while ((*VI_V_CURRENT >> 1) == current_line) {
-            /* busy wait for hardware to increment to next line */
-        }
+        uint32_t current_line = *VI_V_CURRENT_REG >> 1;
+        while ((*VI_V_CURRENT_REG >> 1) == current_line);
         
         uint32_t now = TICKS_READ();
         timings[i] = now - last_time;
         last_time = now;
     }
 
-    // Re-enable interrupts now that the critical timing section is done.
     enable_interrupts();
 
     // 4. Reporting to USB (SC64 / ISViewer)
