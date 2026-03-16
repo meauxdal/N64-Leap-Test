@@ -44,6 +44,9 @@ int main(void) {
     *(volatile uint32_t*)VI_H_SYNC_LEAP = leap_reg_val;
     *(volatile uint32_t*)VI_H_SYNC      = sync_reg_val;
 
+    debugf("H_SYNC      = %08lx\n", *(volatile uint32_t*)VI_H_SYNC);
+    debugf("H_SYNC_LEAP = %08lx\n", *(volatile uint32_t*)VI_H_SYNC_LEAP);
+
     // 3. Critical Measurement Section
     disable_interrupts(); 
     
