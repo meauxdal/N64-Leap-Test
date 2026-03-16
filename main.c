@@ -8,9 +8,14 @@
 #define VI_H_SYNC_LEAP   (VI_BASE + 0x20)
 #define VI_V_CURRENT     (VI_BASE + 0x10)
 
-// Function to wait for VBlank using direct register polling
+// Function to wait for the next VI line transition
 void raw_vi_wait_vblank() {
-    while (!(*(volatile uint32_t*)VI_V_CURRENT & 1));
+    uint32_t line = (*(volatile uint32_t*)VI_V_CURRENT) >> 1;
+
+    // Wait until the line counter changes
+    while (((*(volatile uint32_t*)VI_V_CURRENT) >> 1) == line) {
+        /* spin */
+    }
 }
 
 int main(void) {
