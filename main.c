@@ -3,6 +3,7 @@
 #include <libdragon.h>
 
 #define VI_BASE          0xA4400000
+#define VI_CONTROL       (volatile uint32_t*)(VI_BASE + 0x00)
 #define VI_V_CURRENT     (volatile uint32_t*)(VI_BASE + 0x10)
 #define VI_H_SYNC        (volatile uint32_t*)(VI_BASE + 0x1C)
 #define VI_H_SYNC_LEAP   (volatile uint32_t*)(VI_BASE + 0x20)
@@ -12,31 +13,33 @@ int main(void) {
     timer_init();
     display_init(RESOLUTION_320x240, DEPTH_16_BPP, 2, GAMMA_NONE, ANTIALIAS_RESAMPLE_FETCH_ALWAYS);
 
-    debugf("--- VI Leap Hardware Sync ---\n");
+    debugf("--- Pattern 0b11111 Test ---\n");
 
-    // 1. Set distinct values: Leap A = 3500, Leap B = 4500
-    // Pattern 0 = Always use Leap A
-    uint32_t leap_val = (3500 << 16) | 4500;
-    uint32_t sync_val = (0 << 16) | 3093;
+    // 1. Set distinct values: Leap A = 3500, Leap B = 1000
+    // Pattern 0x1F (0b11111) = Lines 0-3 use Leap A, Line 4 uses Leap B
+    uint32_t leap_val = (3500 << 16) | 1000;
+    uint32_t sync_val = (0x1F << 16) | 3093;
 
     *VI_H_SYNC_LEAP = leap_val;
     *VI_H_SYNC      = sync_val;
+    
+    // Kick the control register to ensure the VI notices the change
+    // We read the current state and write it back to trigger a latch update
+    *VI_CONTROL = *VI_CONTROL;
 
-    // Register Indicators (Verification)
     debugf("REG_H_SYNC:      %08lX\n", *VI_H_SYNC);
     debugf("REG_H_SYNC_LEAP: %08lX\n", *VI_H_SYNC_LEAP);
 
-    // 2. The Latch: Wait for a full field transition
-    // We wait for the line counter to hit 0 (V-Blank) 
-    // This is the ONLY time the VI copies shadow regs to active regs.
-    while ((*VI_V_CURRENT >> 1) != 0); 
-    while ((*VI_V_CURRENT >> 1) == 0);
+    // 2. Strong Latch: Wait for TWO field starts to be absolutely sure
+    for(int i=0; i<2; i++) {
+        while ((*VI_V_CURRENT >> 1) != 0); 
+        while ((*VI_V_CURRENT >> 1) == 0);
+    }
 
-    // 3. Measurement
     disable_interrupts();
     uint32_t timings[16];
     
-    // Sync to start of line 1
+    // Sync to start of a line
     uint32_t start_line = *VI_V_CURRENT >> 1;
     while ((*VI_V_CURRENT >> 1) == start_line);
     
