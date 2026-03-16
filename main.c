@@ -23,19 +23,12 @@ int main(void) {
     debug_init_usblog();
     timer_init();
     
-    // We'll initialize the display just to get the clocks running, 
-    // but we won't use it for rendering after the hijack.
     display_init(RESOLUTION_320x240, DEPTH_16_BPP, 2, GAMMA_NONE, ANTIALIAS_RESAMPLE_FETCH_ALWAYS);
 
     debugf("Starting VI Leap Experiment...\n");
 
-    // 2. Hardware Override
-    // Base 3093 (Terminal Count for 3094)
-    // LEAP_A: 4000
-    // LEAP_B: 3093
-    // Pattern: 0 (Forces LEAP_A every line)
-    
-    uint32_t leap_reg_val = (3093 << 16) | 4000;
+    // 2. Hardware Override    
+    uint32_t leap_reg_val = (3093 << 16) | 3193;
     uint32_t sync_reg_val = (0 << 16) | 3093;
 
     // Sync to a fresh field before breaking the timing
@@ -78,13 +71,9 @@ int main(void) {
 
     debugf("Experiment Complete. Waiting for USB sync...\n");
 
-    // Give the SC64 plenty of time (2 seconds) to drain the debug buffer
-    // wait_ms is a standard libdragon function in timer.h
     wait_ms(2000); 
 
     while (1) {
-        // Keep the CPU alive but doing nothing
-        // This ensures the SC64 doesn't think the console has crashed
     }
 
     return 0;
