@@ -2,66 +2,48 @@
 #include <stdint.h>
 #include <libdragon.h>
 
-#define VI_BASE          0xA4400000
-#define VI_H_SYNC        (VI_BASE + 0x1C)
-#define VI_H_SYNC_LEAP   (VI_BASE + 0x20)
-#define VI_V_CURRENT     (VI_BASE + 0x10)
-
-void raw_vi_wait_vblank() {
-    // Wait until the line counter wraps around to 0 (start of a new frame)
-    while (((*(volatile uint32_t*)VI_V_CURRENT) >> 1) != 0) {
-        /* spin */
-    }
-    // Wait to exit line 0 so we don't instantly trigger a subsequent check
-    while (((*(volatile uint32_t*)VI_V_CURRENT) >> 1) == 0) {
-        /* spin */
-    }
-}
-
 int main(void) {
-    // 1. Initialize Minimal Subsystems
+    // 1. Initialize Subsystems
     debug_init_usblog();
+    debug_init_isviewer(); // Support for both USB and Emulators
     timer_init();
     
+    // We need a display initialized so the VI is actually running
     display_init(RESOLUTION_320x240, DEPTH_16_BPP, 2, GAMMA_NONE, ANTIALIAS_RESAMPLE_FETCH_ALWAYS);
 
-    debugf("Starting VI Leap Experiment...\n");
-
-    // 2. Hardware Override
-    uint32_t leap_reg_val = (3093 << 16) | 3193;
-    uint32_t sync_reg_val = (0 << 16) | 3093;
-
-    // Write the registers FIRST
-    *(volatile uint32_t*)VI_H_SYNC_LEAP = leap_reg_val;
-    *(volatile uint32_t*)VI_H_SYNC      = sync_reg_val;
-
-    debugf("H_SYNC      = %08lx\n", *(volatile uint32_t*)VI_H_SYNC);
-    debugf("H_SYNC_LEAP = %08lx\n", *(volatile uint32_t*)VI_H_SYNC_LEAP);
-
-    // NOW wait for a fresh frame so the N64 latches the new VI registers
-    raw_vi_wait_vblank();
-
-    // 3. Critical Measurement Section
-    disable_interrupts(); 
+    // 2. Define and Apply Hacked Timing
+    // Cloning NTSC as a baseline
+    vi_timing_preset_t test = VI_TIMING_NTSC;
     
-    uint32_t timings[16];
+    /* H_TOTAL: Sets the normal line duration.
+       H_TOTAL_LEAP: Sets the alternate line durations.
+       The leap values will alternate based on the leap mask.
+    */
+    test.vi_h_total = VI_H_TOTAL_SET(0b01100, 400); 
+    test.vi_h_total_leap = VI_H_TOTAL_LEAP_SET(400, 800);
     
-    // -- FIX: Sync to a line boundary BEFORE starting the clock --
-    uint32_t sync_line = (*(volatile uint32_t*)VI_V_CURRENT) >> 1;
-    while (((*(volatile uint32_t*)VI_V_CURRENT) >> 1) == sync_line) {
-        /* spin */
-    }
-    
-    // Now we are perfectly at the start of a new scanline
+    vi_set_timing_preset(&test);
+
+    // 3. The Measurement Phase
+    // Disable interrupts so the CPU doesn't jump away to handle a timer/button
+    disable_interrupts();
+
+    // MUST wait for a V-Blank so the shadow registers latch the new preset 
+    vi_wait_vblank();
+
+    uint32_t timings[16] = {0};
+
+    // Sync to a fresh line boundary so timings[0] isn't a partial line 
+    uint32_t sync_line = *VI_V_CURRENT >> 1;
+    while ((*VI_V_CURRENT >> 1) == sync_line) { /* spin */ }
+
     uint32_t last_time = TICKS_READ();
 
     for (int i = 0; i < 16; i++) {
-        uint32_t current_line = (*(volatile uint32_t*)VI_V_CURRENT) >> 1;
+        uint32_t current_line = *VI_V_CURRENT >> 1;
         
-        // Wait for the next line transition
-        while (((*(volatile uint32_t*)VI_V_CURRENT) >> 1) == current_line) {
-            /* busy wait */
-        }
+        // Wait for the hardware to increment the line counter
+        while ((*VI_V_CURRENT >> 1) == current_line) { /* spin */ }
         
         uint32_t now = TICKS_READ();
         timings[i] = now - last_time;
@@ -70,19 +52,17 @@ int main(void) {
 
     enable_interrupts();
 
-    // 4. Reporting results
-    debugf("\n--- Measurement Results ---\n");
+    // 4. Reporting
+    debugf("\n--- VI Leap Measurement Results ---\n");
     for (int i = 0; i < 16; i++) {
-        // CPU (46.875MHz) to VI (62.5MHz) Conversion: multiply by 4/3
-        uint32_t vi_cycles = (timings[i] * 4) / 3;
-        debugf("Line %02d: %lu CPU Ticks (~%lu VI Cycles)\n", i, timings[i], vi_cycles);
+        // Converting ticks to microseconds for easier reading
+        debugf("Line %02d: %lu ticks (%lu us)\n", i, timings[i], TICKS_TO_US(timings[i]));
     }
 
-    debugf("Experiment Complete. Waiting for USB sync...\n");
-
-    wait_ms(2000); 
+    debugf("Experiment Complete.\n");
 
     while (1) {
+        // Keep the CPU alive to maintain the debug connection
     }
 
     return 0;
