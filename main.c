@@ -20,12 +20,14 @@ int main(void) {
     // 2. Hardware Override
     // These values are written to "shadow" registers. 
     // They won't take effect until the next V-Blank.
-    uint32_t leap_reg_val = (3093 << 16) | 3193;
-    uint32_t sync_reg_val = 3093; // Normal H-Sync period
+    // Keep Pattern at 0 (Always use Leap A)
+    uint32_t sync_reg_val = (0 << 16) | 3093; 
+    
+    // Change Leap A to 4000
+    uint32_t leap_reg_val = (4000 << 16) | 3193; 
 
-    *VI_H_SYNC_LEAP = leap_reg_val;
-    *VI_H_SYNC      = sync_reg_val;
-
+    *(volatile uint32_t*)VI_H_SYNC_LEAP = leap_reg_val;
+    *(volatile uint32_t*)VI_H_SYNC      = sync_reg_val;
     // 3. The Latch Phase
     // Wait for the current frame to end so the VI latches our new values.
     while ((*VI_V_CURRENT >> 1) != 0); 
