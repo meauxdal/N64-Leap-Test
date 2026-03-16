@@ -4,48 +4,52 @@
 
 #define VI_BASE          0xA4400000
 #define VI_CONTROL       (volatile uint32_t*)(VI_BASE + 0x00)
+#define VI_V_SYNC        (volatile uint32_t*)(VI_BASE + 0x0C)
 #define VI_V_CURRENT     (volatile uint32_t*)(VI_BASE + 0x10)
 #define VI_H_SYNC        (volatile uint32_t*)(VI_BASE + 0x1C)
 #define VI_H_SYNC_LEAP   (volatile uint32_t*)(VI_BASE + 0x20)
 
 int main(void) {
+    // Keep ONLY the essentials for communication
     debug_init_usblog();
     timer_init();
-    display_init(RESOLUTION_320x240, DEPTH_16_BPP, 2, GAMMA_NONE, ANTIALIAS_RESAMPLE_FETCH_ALWAYS);
 
-    debugf("--- Pattern 0b11111 Test ---\n");
+    // 1. Minimum VI Start
+    // We set a basic 16-bit BPP mode but don't call the full init.
+    // This ensures the VI clock is actually ticking.
+    *VI_CONTROL = 0x00000002; 
 
-    // 1. Set distinct values: Leap A = 3500, Leap B = 1000
-    // Pattern 0x1F (0b11111) = Lines 0-3 use Leap A, Line 4 uses Leap B
-    uint32_t leap_val = (3500 << 16) | 1000;
-    uint32_t sync_val = (0x1F << 16) | 3093;
+    debugf("--- Bare Metal VI Test ---\n");
 
-    *VI_H_SYNC_LEAP = leap_val;
-    *VI_H_SYNC      = sync_val;
-    
-    // Kick the control register to ensure the VI notices the change
-    // We read the current state and write it back to trigger a latch update
-    *VI_CONTROL = *VI_CONTROL;
+    // 2. Setup Loop
+    // We will try to catch the latching point by writing repeatedly
+    for(int attempt = 0; attempt < 100; attempt++) {
+        
+        // Use an unmistakable H-Sync: 1500 (very short lines)
+        uint32_t leap_val = (1500 << 16) | 1500; 
+        uint32_t sync_val = (0x1F << 16) | 1500; 
 
-    debugf("REG_H_SYNC:      %08lX\n", *VI_H_SYNC);
-    debugf("REG_H_SYNC_LEAP: %08lX\n", *VI_H_SYNC_LEAP);
+        *VI_H_SYNC_LEAP = leap_val;
+        *VI_H_SYNC      = sync_val;
+        *VI_V_SYNC      = 0x20D; // Required to define field height
 
-    // 2. Strong Latch: Wait for TWO field starts to be absolutely sure
-    for(int i=0; i<2; i++) {
-        while ((*VI_V_CURRENT >> 1) != 0); 
-        while ((*VI_V_CURRENT >> 1) == 0);
+        // Every 10 attempts, wait for a V-Blank transition
+        if (attempt % 10 == 0) {
+            uint32_t line = *VI_V_CURRENT >> 1;
+            while ((*VI_V_CURRENT >> 1) == line);
+        }
     }
 
+    debugf("Final Reg State: H:%08lX L:%08lX\n", *VI_H_SYNC, *VI_H_SYNC_LEAP);
+
+    // 3. Long Duration Measurement
     disable_interrupts();
-    uint32_t timings[16];
     
-    // Sync to start of a line
-    uint32_t start_line = *VI_V_CURRENT >> 1;
-    while ((*VI_V_CURRENT >> 1) == start_line);
-    
+    // Increase array size to see more lines over time
+    uint32_t timings[64]; 
     uint32_t last_time = TICKS_READ();
 
-    for (int i = 0; i < 16; i++) {
+    for (int i = 0; i < 64; i++) {
         uint32_t current_line = *VI_V_CURRENT >> 1;
         while ((*VI_V_CURRENT >> 1) == current_line);
         
@@ -55,10 +59,17 @@ int main(void) {
     }
     enable_interrupts();
 
-    for (int i = 0; i < 16; i++) {
-        debugf("Line %02d: %lu ticks\n", i, timings[i]);
+    // 4. Output Results
+    for (int i = 0; i < 64; i++) {
+        debugf("L%02d: %lu\n", i, timings[i]);
     }
 
-    while (1);
+    debugf("Experiment Complete. Spinning...\n");
+    while (1) {
+        // Keep writing in the background to prevent any auto-reset
+        *VI_H_SYNC_LEAP = (1500 << 16) | 1500;
+        *VI_H_SYNC = (0x1F << 16) | 1500;
+    }
+    
     return 0;
 }
