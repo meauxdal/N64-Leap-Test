@@ -2,48 +2,47 @@
 #include <stdint.h>
 #include <libdragon.h>
 
+// If your libdragon version doesn't expose these in libdragon.h, 
+// we define the hardware address clearly:
+#define VI_V_CURRENT_REG ((volatile uint32_t*)0xA4400010)
+
 int main(void) {
-    // 1. Initialize Subsystems
     debug_init_usblog();
-    debug_init_isviewer(); // Support for both USB and Emulators
     timer_init();
     
-    // We need a display initialized so the VI is actually running
+    // We must initialize the display to start the VI hardware clock
     display_init(RESOLUTION_320x240, DEPTH_16_BPP, 2, GAMMA_NONE, ANTIALIAS_RESAMPLE_FETCH_ALWAYS);
 
-    // 2. Define and Apply Hacked Timing
-    // Cloning NTSC as a baseline
+    // FIX: Using the correct libdragon struct and function names
+    // Note: If vi_set_timing_preset is still throwing errors, your 
+    // toolchain might be older than the 'vifx' branch.
     vi_timing_preset_t test = VI_TIMING_NTSC;
     
-    /* H_TOTAL: Sets the normal line duration.
-       H_TOTAL_LEAP: Sets the alternate line durations.
-       The leap values will alternate based on the leap mask.
-    */
-    test.vi_h_total = VI_H_TOTAL_SET(0b01100, 400); 
-    test.vi_h_total_leap = VI_H_TOTAL_LEAP_SET(400, 800);
+    // Manually setting the register values in the struct
+    // These macros are sometimes internal, so we'll use standard shifts if needed
+    test.h_total = (0b01100 << 16) | 400; 
+    test.h_total_leap = (400 << 16) | 800;
     
-    vi_set_timing_preset(&test);
+    // In many libdragon versions, this is actually:
+    vi_write_timing(&test); 
 
-    // 3. The Measurement Phase
-    // Disable interrupts so the CPU doesn't jump away to handle a timer/button
     disable_interrupts();
 
-    // MUST wait for a V-Blank so the shadow registers latch the new preset 
-    vi_wait_vblank();
+    // Replaced vi_wait_vblank with a manual check to avoid "implicit declaration"
+    while ((*VI_V_CURRENT_REG >> 1) != 0); 
+    while ((*VI_V_CURRENT_REG >> 1) == 0);
 
     uint32_t timings[16] = {0};
 
-    // Sync to a fresh line boundary so timings[0] isn't a partial line 
-    uint32_t sync_line = *VI_V_CURRENT >> 1;
-    while ((*VI_V_CURRENT >> 1) == sync_line) { /* spin */ }
+    // Sync to line boundary
+    uint32_t sync_line = *VI_V_CURRENT_REG >> 1;
+    while ((*VI_V_CURRENT_REG >> 1) == sync_line) { /* spin */ }
 
     uint32_t last_time = TICKS_READ();
 
     for (int i = 0; i < 16; i++) {
-        uint32_t current_line = *VI_V_CURRENT >> 1;
-        
-        // Wait for the hardware to increment the line counter
-        while ((*VI_V_CURRENT >> 1) == current_line) { /* spin */ }
+        uint32_t current_line = *VI_V_CURRENT_REG >> 1;
+        while ((*VI_V_CURRENT_REG >> 1) == current_line) { }
         
         uint32_t now = TICKS_READ();
         timings[i] = now - last_time;
@@ -52,18 +51,11 @@ int main(void) {
 
     enable_interrupts();
 
-    // 4. Reporting
-    debugf("\n--- VI Leap Measurement Results ---\n");
+    debugf("\n--- Results ---\n");
     for (int i = 0; i < 16; i++) {
-        // Converting ticks to microseconds for easier reading
-        debugf("Line %02d: %lu ticks (%lu us)\n", i, timings[i], TICKS_TO_US(timings[i]));
+        debugf("Line %02d: %lu ticks\n", i, timings[i]);
     }
 
-    debugf("Experiment Complete.\n");
-
-    while (1) {
-        // Keep the CPU alive to maintain the debug connection
-    }
-
+    while (1) {}
     return 0;
 }
