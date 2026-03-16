@@ -2,47 +2,51 @@
 #include <stdint.h>
 #include <libdragon.h>
 
-// If your libdragon version doesn't expose these in libdragon.h, 
-// we define the hardware address clearly:
-#define VI_V_CURRENT_REG ((volatile uint32_t*)0xA4400010)
+// Direct Hardware Addresses 
+#define VI_BASE          0xA4400000
+#define VI_V_CURRENT     (volatile uint32_t*)(VI_BASE + 0x10)
+#define VI_H_SYNC        (volatile uint32_t*)(VI_BASE + 0x1C)
+#define VI_H_SYNC_LEAP   (volatile uint32_t*)(VI_BASE + 0x20)
 
 int main(void) {
     debug_init_usblog();
     timer_init();
     
-    // We must initialize the display to start the VI hardware clock
+    // 1. Start the VI clock by initializing a standard display
     display_init(RESOLUTION_320x240, DEPTH_16_BPP, 2, GAMMA_NONE, ANTIALIAS_RESAMPLE_FETCH_ALWAYS);
 
-    // FIX: Using the correct libdragon struct and function names
-    // Note: If vi_set_timing_preset is still throwing errors, your 
-    // toolchain might be older than the 'vifx' branch.
-    vi_timing_preset_t test = VI_TIMING_NTSC;
+    debugf("Starting Raw VI Leap Experiment...\n");
+
+    // 2. Hardware Override
+    // These values are written to "shadow" registers. 
+    // They won't take effect until the next V-Blank.
+    uint32_t leap_reg_val = (3093 << 16) | 3193;
+    uint32_t sync_reg_val = 3093; // Normal H-Sync period
+
+    *VI_H_SYNC_LEAP = leap_reg_val;
+    *VI_H_SYNC      = sync_reg_val;
+
+    // 3. The Latch Phase
+    // Wait for the current frame to end so the VI latches our new values.
+    while ((*VI_V_CURRENT >> 1) != 0); 
+    while ((*VI_V_CURRENT >> 1) == 0);
+
+    // 4. The Measurement Phase
+    disable_interrupts(); 
     
-    // Manually setting the register values in the struct
-    // These macros are sometimes internal, so we'll use standard shifts if needed
-    test.h_total = (0b01100 << 16) | 400; 
-    test.h_total_leap = (400 << 16) | 800;
-    
-    // In many libdragon versions, this is actually:
-    vi_write_timing(&test); 
+    uint32_t timings[16];
 
-    disable_interrupts();
-
-    // Replaced vi_wait_vblank with a manual check to avoid "implicit declaration"
-    while ((*VI_V_CURRENT_REG >> 1) != 0); 
-    while ((*VI_V_CURRENT_REG >> 1) == 0);
-
-    uint32_t timings[16] = {0};
-
-    // Sync to line boundary
-    uint32_t sync_line = *VI_V_CURRENT_REG >> 1;
-    while ((*VI_V_CURRENT_REG >> 1) == sync_line) { /* spin */ }
+    // SYNC: Wait for the start of a fresh scanline
+    uint32_t start_line = (*VI_V_CURRENT) >> 1;
+    while (((*VI_V_CURRENT) >> 1) == start_line);
 
     uint32_t last_time = TICKS_READ();
 
     for (int i = 0; i < 16; i++) {
-        uint32_t current_line = *VI_V_CURRENT_REG >> 1;
-        while ((*VI_V_CURRENT_REG >> 1) == current_line) { }
+        uint32_t current_line = (*VI_V_CURRENT) >> 1;
+        
+        // Wait for line transition
+        while (((*VI_V_CURRENT) >> 1) == current_line);
         
         uint32_t now = TICKS_READ();
         timings[i] = now - last_time;
@@ -51,11 +55,13 @@ int main(void) {
 
     enable_interrupts();
 
-    debugf("\n--- Results ---\n");
+    // 5. Reporting results
+    debugf("\n--- Measurement Results ---\n");
     for (int i = 0; i < 16; i++) {
-        debugf("Line %02d: %lu ticks\n", i, timings[i]);
+        // CPU Ticks (typically 46.875MHz or 93.75MHz depending on console/emu)
+        debugf("Line %02d: %lu CPU Ticks\n", i, timings[i]);
     }
 
-    while (1) {}
+    while (1) { /* spin */ }
     return 0;
 }
